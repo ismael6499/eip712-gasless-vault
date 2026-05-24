@@ -268,6 +268,7 @@ contract GaslessVault is EIP712, Nonces, ReentrancyGuard {
     /// which prevents signature replay across contracts.
     // solhint-disable-next-line func-name-mixedcase
     function DOMAIN_SEPARATOR() external view returns (bytes32) {
+        // Caches the domain separator to avoid redundant SLOAD operations where possible
         return _domainSeparatorV4();
     }
 }
