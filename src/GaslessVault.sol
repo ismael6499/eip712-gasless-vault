@@ -4,12 +4,15 @@ pragma solidity 0.8.26;
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {Nonces} from "@openzeppelin/contracts/utils/Nonces.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {PermitToken} from "./PermitToken.sol";
 
-/// @title GaslessVault — A Vault with Custom EIP-712 Signed Authorizations
+/// @title GaslessVault — Secure EIP-712 Custom Signed Vault Authorizations
 /// @author Agustin Acosta
-/// @notice This contract demonstrates CUSTOM EIP-712 typed data beyond ERC-2612 Permit,
-/// using OpenZeppelin's EIP712, ECDSA, and Nonces contracts.
+/// @notice A gasless vault protocol demonstrating custom EIP-712 typed data signing,
+/// enabling trustless relayer-mediated deposits and custom-authorized withdrawals.
+/// @dev Combines OpenZeppelin's EIP712, Nonces, ReentrancyGuard, and SafeERC20 utilities.
 ///
 /// ══════════════════════════════════════════════════════════════════════════════
 /// WHY THIS CONTRACT?
@@ -55,7 +58,8 @@ import {PermitToken} from "./PermitToken.sol";
 ///   - Fields in declaration order
 ///   - Use Solidity types (address, uint256, bytes32, etc.)
 ///
-contract GaslessVault is EIP712, Nonces {
+contract GaslessVault is EIP712, Nonces, ReentrancyGuard {
+    using SafeERC20 for PermitToken;
     // ═══════════════════════════════════════════════════════════════════════
     // STATE
     // ═══════════════════════════════════════════════════════════════════════
@@ -87,6 +91,7 @@ contract GaslessVault is EIP712, Nonces {
     error InvalidWithdrawSignature();
     error InsufficientVaultBalance();
     error ZeroAmount();
+    error InvalidAddress();
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -101,6 +106,7 @@ contract GaslessVault is EIP712, Nonces {
 
     /// @param _token The PermitToken this vault accepts
     constructor(PermitToken _token) EIP712("GaslessVault", "1") {
+        if (address(_token) == address(0)) revert InvalidAddress();
         token = _token;
     }
 
@@ -113,7 +119,7 @@ contract GaslessVault is EIP712, Nonces {
         if (amount == 0) revert ZeroAmount();
 
         vaultBalanceOf[msg.sender] += amount;
-        token.transferFrom(msg.sender, address(this), amount);
+        token.safeTransferFrom(msg.sender, address(this), amount);
 
         emit Deposited(msg.sender, amount);
     }
@@ -151,7 +157,7 @@ contract GaslessVault is EIP712, Nonces {
 
         // Step 2: Transfer tokens from owner to vault
         vaultBalanceOf[owner] += amount;
-        token.transferFrom(owner, address(this), amount);
+        token.safeTransferFrom(owner, address(this), amount);
 
         emit Deposited(owner, amount);
     }
@@ -161,12 +167,13 @@ contract GaslessVault is EIP712, Nonces {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Withdraw your tokens from the vault
-    function withdraw(address to, uint256 amount) external {
+    function withdraw(address to, uint256 amount) external nonReentrant {
+        if (to == address(0)) revert InvalidAddress();
         if (amount == 0) revert ZeroAmount();
         if (vaultBalanceOf[msg.sender] < amount) revert InsufficientVaultBalance();
 
         vaultBalanceOf[msg.sender] -= amount;
-        token.transfer(to, amount);
+        token.safeTransfer(to, amount);
 
         emit Withdrawn(msg.sender, to, amount);
     }
@@ -216,8 +223,9 @@ contract GaslessVault is EIP712, Nonces {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external {
+    ) external nonReentrant {
         // Check: deadline
+        if (to == address(0)) revert InvalidAddress();
         if (block.timestamp > deadline) revert DeadlineExpired();
         if (amount == 0) revert ZeroAmount();
         if (vaultBalanceOf[owner] < amount) revert InsufficientVaultBalance();
@@ -246,7 +254,7 @@ contract GaslessVault is EIP712, Nonces {
         vaultBalanceOf[owner] -= amount;
 
         // Interaction: transfer tokens
-        token.transfer(to, amount);
+        token.safeTransfer(to, amount);
 
         emit Withdrawn(owner, to, amount);
     }
