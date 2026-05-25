@@ -451,6 +451,123 @@ contract EIP712Test is Test {
     }
 
     // ═════════════════════════════════════════════════════════════════════
+    // 7: ADDITIONAL UNIT & FUZZ TESTS FOR 100% COVERAGE
+    // ═════════════════════════════════════════════════════════════════════
+
+    /// @notice Verify constructor reverts if token address is zero
+    function test_constructorRevertsWithZeroAddress() public {
+        vm.expectRevert(GaslessVault.InvalidAddress.selector);
+        new GaslessVault(PermitToken(address(0)));
+    }
+
+    /// @notice Verify direct deposit reverts with zero amount
+    function test_directDepositRevertsWithZeroAmount() public {
+        vm.prank(ALICE);
+        vm.expectRevert(GaslessVault.ZeroAmount.selector);
+        vault.deposit(0);
+    }
+
+    /// @notice Verify direct withdraw reverts with zero amount
+    function test_withdrawRevertsWithZeroAmount() public {
+        vm.prank(ALICE);
+        vm.expectRevert(GaslessVault.ZeroAmount.selector);
+        vault.withdraw(BOB, 0);
+    }
+
+    /// @notice Verify direct withdraw reverts when withdrawing to zero address
+    function test_withdrawRevertsWithZeroAddress() public {
+        _depositToVault(ALICE, ALICE_PK, 100e18);
+        vm.prank(ALICE);
+        vm.expectRevert(GaslessVault.InvalidAddress.selector);
+        vault.withdraw(address(0), 100e18);
+    }
+
+    /// @notice Verify withdrawBySig reverts when withdrawing to zero address
+    function test_withdrawBySigRevertsWithZeroAddress() public {
+        uint256 amount = 100e18;
+        uint256 deadline = block.timestamp + 1 hours;
+        _depositToVault(ALICE, ALICE_PK, amount);
+
+        (uint8 v, bytes32 r, bytes32 s) = _signWithdraw(
+            ALICE, ALICE_PK, address(0), amount, 0, deadline
+        );
+
+        vm.expectRevert(GaslessVault.InvalidAddress.selector);
+        vault.withdrawBySig(ALICE, address(0), amount, deadline, v, r, s);
+    }
+
+    /// @notice Verify withdrawBySig reverts with zero amount
+    function test_withdrawBySigRevertsWithZeroAmount() public {
+        uint256 deadline = block.timestamp + 1 hours;
+        _depositToVault(ALICE, ALICE_PK, 100e18);
+
+        (uint8 v, bytes32 r, bytes32 s) = _signWithdraw(
+            ALICE, ALICE_PK, BOB, 0, 0, deadline
+        );
+
+        vm.expectRevert(GaslessVault.ZeroAmount.selector);
+        vault.withdrawBySig(ALICE, BOB, 0, deadline, v, r, s);
+    }
+
+    /// @notice Fuzz: direct deposit and withdraw works for any valid amounts
+    function test_fuzz_depositAndWithdraw(uint256 amount) public {
+        amount = bound(amount, 1, ALICE_AMOUNT);
+
+        // Approve and deposit
+        vm.startPrank(ALICE);
+        token.approve(address(vault), amount);
+        vault.deposit(amount);
+        assertEq(vault.vaultBalanceOf(ALICE), amount);
+
+        // Withdraw
+        vault.withdraw(BOB, amount);
+        assertEq(vault.vaultBalanceOf(ALICE), 0);
+        assertEq(token.balanceOf(BOB), amount);
+        vm.stopPrank();
+    }
+
+    /// @notice Fuzz: withdrawBySig works for valid signature, amount, and recipient
+    function test_fuzz_withdrawBySig(uint256 amount, address recipient) public {
+        // Exclude zero address for recipient
+        vm.assume(recipient != address(0));
+        amount = bound(amount, 1, ALICE_AMOUNT);
+
+        // Deposit first
+        _depositToVault(ALICE, ALICE_PK, amount);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        uint256 nonce = vault.nonces(ALICE);
+
+        (uint8 v, bytes32 r, bytes32 s) = _signWithdraw(
+            ALICE, ALICE_PK, recipient, amount, nonce, deadline
+        );
+
+        vault.withdrawBySig(ALICE, recipient, amount, deadline, v, r, s);
+
+        assertEq(vault.vaultBalanceOf(ALICE), 0);
+        assertEq(token.balanceOf(recipient), amount);
+    }
+
+    /// @notice Fuzz: withdrawBySig always reverts when deadline has passed
+    function test_fuzz_withdrawBySigRevertsExpiredDeadline(uint256 amount, uint256 timePastDeadline) public {
+        amount = bound(amount, 1, ALICE_AMOUNT);
+        timePastDeadline = bound(timePastDeadline, 1, 365 days);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        _depositToVault(ALICE, ALICE_PK, amount);
+
+        (uint8 v, bytes32 r, bytes32 s) = _signWithdraw(
+            ALICE, ALICE_PK, BOB, amount, 0, deadline
+        );
+
+        // Warp past deadline
+        vm.warp(deadline + timePastDeadline);
+
+        vm.expectRevert(GaslessVault.DeadlineExpired.selector);
+        vault.withdrawBySig(ALICE, BOB, amount, deadline, v, r, s);
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
     // HELPERS — Signing Functions
     // ═════════════════════════════════════════════════════════════════════
     // These helpers replicate the EIP-712 signing flow that a wallet does.
